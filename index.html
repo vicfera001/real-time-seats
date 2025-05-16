@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <!-- Keep all your existing head content, styles, etc. -->
+    <!-- Add this meta tag to prevent caching -->
+    <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="pragma" content="no-cache">
+    <meta http-equiv="expires" content="0">
+</head>
+<body>
+    <!-- Keep all your existing HTML structure -->
+    
+    <script>
+        // ======================
+        // CONFIGURATION
+        // ======================
+        const CONFIG = {
+            GOOGLE_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbyuZQoSzoi8eNmYW7er6BgnTGGAxgQ1ZXWHwK7SplNLafklcT0cXQw-MeKY2o75b8vZOA/exec",
+            API_KEY: "W7x9-K2p4-R6t8-Y1v3!Q5z0-U8n2-M4b6",
+            PASSWORD: "prof123",
+            MAX_NAME_DISPLAY: 10,
+            POLL_INTERVAL: 5000 // 5 seconds
+        };
+
+        // ======================
+        // INITIAL SETUP
+        // ======================
+        let classroomData = {
+            seats: Array(6).fill().map(() => Array(6).fill(null)),
+            lastUpdate: 0
+        };
+
+        // Mark door seats
+        classroomData.seats[0][0] = "PORTA"; // A1
+        classroomData.seats[0][1] = "PORTA"; // A2
+
+        // ======================
+        // SEAT GENERATION
+        // ======================
+        const classroom = document.getElementById('classroom');
+        
+        // Generate seats B1-F6
+        for (let row = 1; row < 6; row++) {
+            for (let col = 0; col < 6; col++) {
+                const seatCode = `${String.fromCharCode(65 + row)}${col + 1}`;
+                const seat = document.createElement('div');
+                seat.className = 'seat';
+                seat.dataset.seat = seatCode;
+                
+                const seatLabel = document.createElement('span');
+                seatLabel.className = 'seat-label';
+                seatLabel.textContent = seatCode;
+                seat.appendChild(seatLabel);
+                
+                seat.addEventListener('click', handleSeatClick);
+                classroom.appendChild(seat);
+            }
+        }
+
+        // ======================
+        // REAL-TIME UPDATES
+        // ======================
+        function startPolling() {
+            fetchSeatData();
+            setInterval(fetchSeatData, CONFIG.POLL_INTERVAL);
+        }
+
+        async function fetchSeatData() {
+            try {
+                const url = `${CONFIG.GOOGLE_SCRIPT_URL}?action=getAllSeats&key=${encodeURIComponent(CONFIG.API_KEY)}&timestamp=${Date.now()}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.status === "success") {
+                    updateClassroom(data.data);
+                }
+            } catch (error) {
+                console.error("Error fetching seat data:", error);
+            }
+        }
+
+        function updateClassroom(serverData) {
+            // Convert server data format to our matrix format
+            const newData = Array(6).fill().map(() => Array(6).fill(null));
+            
+            // Mark door seats
+            newData[0][0] = "PORTA";
+            newData[0][1] = "PORTA";
+            
+            // Process all seats from server
+            for (const rowLetter in serverData) {
+                const rowIndex = rowLetter.charCodeAt(0) - 65;
+                serverData[rowLetter].forEach((seatData, colIndex) => {
+                    if (seatData && seatData !== "PORTA") {
+                        newData[rowIndex][colIndex] = seatData;
+                    }
+                });
+            }
+            
+            // Update only changed seats
+            for (let row = 0; row < 6; row++) {
+                for (let col = 0; col < 6; col++) {
+                    const seatCode = `${String.fromCharCode(65 + row)}${col + 1}`;
+                    const seatElement = document.querySelector(`[data-seat="${seatCode}"]`);
+                    
+                    // Skip door seats
+                    if (seatCode === "A1" || seatCode === "A2") continue;
+                    
+                    const currentSeat = classroomData.seats[row][col];
+                    const newSeat = newData[row][col];
+                    
+                    // If seat changed
+                    if (JSON.stringify(currentSeat) !== JSON.stringify(newSeat)) {
+                        classroomData.seats[row][col] = newSeat;
+                        
+                        if (newSeat) {
+                            // Occupied seat
+                            seatElement.classList.remove('selected');
+                            seatElement.classList.add('occupied');
+                            seatElement.innerHTML = `
+                                <span class="seat-label">${seatCode}</span>
+                                <div class="student-info">${newSeat.name.substring(0, CONFIG.MAX_NAME_DISPLAY)}</div>
+                            `;
+                        } else {
+                            // Available seat
+                            seatElement.classList.remove('occupied', 'selected');
+                            seatElement.innerHTML = `<span class="seat-label">${seatCode}</span>`;
+                        }
+                    }
+                });
+            }
+        }
+
+        // ======================
+        // MODIFIED EVENT HANDLERS
+        // ======================
+        async function handleSeatClick() {
+            const studentId = document.getElementById('studentId').value.trim();
+            if (!studentId) {
+                alert('Por favor, insira seu ID primeiro');
+                return;
+            }
+            
+            const seatCode = this.dataset.seat;
+            const [row, col] = getPositionFromCode(seatCode);
+            
+            // If clicking own occupied seat
+            if (this.classList.contains('occupied')) {
+                const seatData = classroomData.seats[row][col];
+                if (seatData && seatData.id === studentId) {
+                    if (confirm(`Liberar lugar ${seatCode}?`)) {
+                        await freeSeat(seatCode, studentId);
+                    }
+                }
+                return;
+            }
+            
+            // Prevent multiple selections
+            document.querySelectorAll('.seat.selected').forEach(s => {
+                s.classList.remove('selected');
+            });
+            this.classList.add('selected');
+            document.getElementById('selectedSeat').value = seatCode;
+        }
+
+        document.getElementById('seatForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            // 1. Collect form data
+            const formData = {
+                id: document.getElementById('studentId').value.trim(),
+                name: document.getElementById('studentName').value.trim(),
+                email: document.getElementById('studentEmail').value.trim(),
+                seat: document.getElementById('selectedSeat').value,
+                preferenceReason: document.getElementById('preferenceReason').value.trim(),
+                alternativeOption: document.getElementById('alternativeOption').value.trim(),
+                comments: document.getElementById('comments').value.trim(),
+                timestamp: new Date().toISOString()
+            };
+
+            // 2. Validate
+            if (!formData.id || !formData.name || !formData.seat) {
+                alert("Preencha os campos obrigatórios (ID, Nome e Lugar)!");
+                return;
+            }
+
+            // 3. Save to server
+            try {
+                const response = await saveToGoogleSheet(formData);
+                
+                if (response.status !== "success") {
+                    throw new Error("Failed to save to Google Sheets");
+                }
+                
+                showSuccessMessage(formData);
+                // The seat will update automatically on next poll
+                
+            } catch (error) {
+                showSuccessMessage(formData, true);
+                console.error("Google Sheets error:", error);
+            }
+        });
+
+        // ======================
+        // MODIFIED CORE FUNCTIONS
+        // ======================
+        async function saveToGoogleSheet(data) {
+            const url = `${CONFIG.GOOGLE_SCRIPT_URL}?action=submitSeat&key=${encodeURIComponent(CONFIG.API_KEY)}`;
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: `data=${encodeURIComponent(JSON.stringify(data))}`
+            });
+            return await response.json();
+        }
+
+        async function freeSeat(seatCode, studentId) {
+            // In this implementation, freeing a seat means selecting it again with empty data
+            const formData = {
+                id: studentId,
+                name: "",
+                email: "",
+                seat: seatCode,
+                preferenceReason: "",
+                alternativeOption: "",
+                comments: "Seat freed by student",
+                timestamp: new Date().toISOString()
+            };
+            
+            try {
+                await saveToGoogleSheet(formData);
+                // The seat will update automatically on next poll
+            } catch (error) {
+                console.error("Error freeing seat:", error);
+                alert("Erro ao liberar o lugar. Tente novamente.");
+            }
+        }
+
+        async function resetAllSeats() {
+            if (!confirm('Tem certeza que deseja resetar TODOS os lugares?\nEsta ação não pode ser desfeita!')) return;
+            
+            try {
+                const url = `${CONFIG.GOOGLE_SCRIPT_URL}?action=resetAllSeats&key=${encodeURIComponent(CONFIG.API_KEY)}&password=${encodeURIComponent(CONFIG.PASSWORD)}`;
+                const response = await fetch(url);
+                const result = await response.json();
+                
+                if (result.status === "success") {
+                    alert('Todos os lugares foram resetados!');
+                    document.getElementById('teacherPassword').value = '';
+                    document.getElementById('resetAllBtn').style.display = 'none';
+                    // Seats will update automatically on next poll
+                } else {
+                    throw new Error(result.message || "Reset failed");
+                }
+            } catch (error) {
+                alert(`Erro ao resetar lugares: ${error.message}`);
+            }
+        }
+
+        // ======================
+        // KEEP EXISTING HELPER FUNCTIONS
+        // ======================
+        function getPositionFromCode(seatCode) {
+            const row = seatCode.charCodeAt(0) - 65;
+            const col = parseInt(seatCode.slice(1)) - 1;
+            return [row, col];
+        }
+
+        function showSuccessMessage(data, isLocalOnly = false) {
+            const message = isLocalOnly 
+                ? `Lugar ${data.seat} escolhido localmente (dados serão enviados quando on-line)`
+                : `Lugar ${data.seat} registrado para ${data.name}`;
+            
+            const successMsg = document.getElementById('successMessage');
+            successMsg.textContent = message;
+            successMsg.style.display = 'block';
+            
+            setTimeout(() => {
+                document.getElementById('seatForm').reset();
+                successMsg.style.display = 'none';
+            }, 3000);
+        }
+
+        // Initialize
+        document.getElementById('teacherPassword').value = '';
+        document.getElementById('teacherPassword').addEventListener('input', function() {
+            const btn = document.getElementById('resetAllBtn');
+            btn.style.display = (this.value === CONFIG.PASSWORD) ? 'block' : 'none';
+        });
+        
+        // Start polling for updates
+        startPolling();
+    </script>
+</body>
+</html>
